@@ -151,6 +151,73 @@ for res in results_df.head(5).to_dict(orient="records"):
 # ==========================
 # 🏆 7. Top 3 catenaries
 # ==========================
-top3 = results_df.sort_values(by="c", ascending=False).head(3)
-print("\n📊 Top 3 Catenary Fits by Curvature (c):")
-print(top3[['cable_id', 'wire_id', 'x0', 'y0', 'c']].to_string(index=False))
+
+# --- Catenary Fit Per Cable with RMSE ---
+
+fitted_catenaries = []
+
+for cable_id in sorted(df['cluster'].unique()):
+    if cable_id == -1:
+        continue  # skip noise
+
+    cable_df = df[df['cluster'] == cable_id].copy()
+    projected_df, _, _ = project_to_2d_pca(cable_df)
+    data = projected_df[['u', 'v']].to_numpy()
+
+    # Estimate initial parameters
+    x0, y0 = find_param(data)
+    initial_c = 10.0
+
+    # Fit catenary using minimize
+    result = minimize(lambda c: loss(c, data, x0, y0),
+                      x0=[initial_c], bounds=[(0.1, None)])
+
+    if not result.success:
+        print(f"⚠️ Fit failed for cable {cable_id}")
+        continue
+
+    best_c = result.x[0]
+
+    # Predict curve
+    x_vals = np.linspace(data[:, 0].min(), data[:, 0].max(), 500)
+    y_vals = catenary(x_vals, y0, best_c, x0)
+
+    # ✅ Compute RMSE
+    y_pred = catenary(data[:, 0], y0, best_c, x0)
+    rmse = np.sqrt(np.mean((data[:, 1] - y_pred) ** 2))
+
+    # Plot
+    plt.figure(figsize=(8, 5))
+    plt.scatter(data[:, 0], data[:, 1], s=2, color='red', label='Cable Points')
+    plt.plot(x_vals, y_vals, color='blue', label='Best-fit Catenary')
+    plt.xlabel("u")
+    plt.ylabel("v")
+    plt.title(f"📐 Cable {cable_id} — Catenary Fit (RMSE={rmse:.3f})")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    # Print equation
+    print(f"✅ Cable {cable_id} → y(x) = {y0:.2f} + {best_c:.2f} * [cosh((x - {x0:.2f}) / {best_c:.2f}) - 1]")
+    print(f"   RMSE = {rmse:.4f}")
+
+    # Store results
+    fitted_catenaries.append({
+        'cable_id': cable_id,
+        'c': best_c,
+        'x0': x0,
+        'y0': y0,
+        'rmse': rmse
+    })
+
+
+# --- 3. Results Summary ---
+
+summary_df = pd.DataFrame(fitted_catenaries)
+print("\n📊 Catenary Fit Results:")
+display(summary_df)
+
+# ✅ Show top 3 by lowest RMSE (best fits)
+top3_best = summary_df.sort_values(by="rmse").head(3)
+print("\n🏆 Top 3 Best Catenary Fits (Lowest RMSE):")
+print(top3_best[['cable_id', 'c', 'x0', 'y0', 'rmse']].to_string(index=False))
